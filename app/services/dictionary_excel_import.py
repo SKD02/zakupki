@@ -682,37 +682,18 @@ def _import_supplier(cur, row):
         report_year = _as_int(row.get("report_year"))
         
         if report_year:
-            financial_values = {
-                "average_headcount": _as_int(row.get("average_headcount")),
-                "credit_limit_rub": _as_float(row.get("credit_limit_rub")),
-                "pending_claims_as_defendant_rub": _as_float(row.get("pending_claims_as_defendant_rub")),
-                "enforcement_proceedings_rub": _as_float(row.get("enforcement_proceedings_rub")),
-                "charter_capital_rub": _as_float(row.get("charter_capital_rub")),
-        
-                "income_rub": _as_float(row.get("income_rub")),
-                "expenses_rub": _as_float(row.get("expenses_rub")),
-                "taxes_rub": _as_float(row.get("taxes_rub")),
-                "total_assets_rub": _as_float(row.get("total_assets_rub")),
-                "retained_earnings_uncovered_loss_rub": _as_float(row.get("retained_earnings_uncovered_loss_rub")),
-                "capital_and_reserves_rub": _as_float(row.get("capital_and_reserves_rub")),
-                "long_term_liabilities_rub": _as_float(row.get("long_term_liabilities_rub")),
-                "short_term_liabilities_rub": _as_float(row.get("short_term_liabilities_rub")),
-        
-                "revenue_rub": _as_float(row.get("revenue_rub")),
-                "profit_loss_from_sales_rub": _as_float(row.get("profit_loss_from_sales_rub")),
-                "net_profit_loss_rub": _as_float(row.get("net_profit_loss_rub")),
-            }
-        
             cur.execute(
                 """
                 INSERT INTO supplier_financials (
                     supplier_id,
                     report_year,
+        
                     average_headcount,
                     credit_limit_rub,
                     pending_claims_as_defendant_rub,
                     enforcement_proceedings_rub,
                     charter_capital_rub,
+        
                     income_rub,
                     expenses_rub,
                     taxes_rub,
@@ -721,15 +702,19 @@ def _import_supplier(cur, row):
                     capital_and_reserves_rub,
                     long_term_liabilities_rub,
                     short_term_liabilities_rub,
+        
                     revenue_rub,
                     profit_loss_from_sales_rub,
                     net_profit_loss_rub
                 )
                 VALUES (
-                    %s,%s,
-                    %s,%s,%s,%s,%s,
-                    %s,%s,%s,%s,%s,%s,%s,%s,
-                    %s,%s,%s
+                    %s, %s,
+        
+                    %s, %s, %s, %s, %s,
+        
+                    %s, %s, %s, %s, %s, %s, %s, %s,
+        
+                    %s, %s, %s
                 )
                 ON CONFLICT (supplier_id, report_year)
                 DO UPDATE SET
@@ -751,30 +736,31 @@ def _import_supplier(cur, row):
                     revenue_rub = COALESCE(EXCLUDED.revenue_rub, supplier_financials.revenue_rub),
                     profit_loss_from_sales_rub = COALESCE(EXCLUDED.profit_loss_from_sales_rub, supplier_financials.profit_loss_from_sales_rub),
                     net_profit_loss_rub = COALESCE(EXCLUDED.net_profit_loss_rub, supplier_financials.net_profit_loss_rub),
+        
                     updated_at = now()
                 """,
                 (
                     supplier_id,
                     report_year,
         
-                    financial_values["average_headcount"],
-                    financial_values["credit_limit_rub"],
-                    financial_values["pending_claims_as_defendant_rub"],
-                    financial_values["enforcement_proceedings_rub"],
-                    financial_values["charter_capital_rub"],
+                    _as_int(row.get("average_headcount")),
+                    _as_float(row.get("credit_limit_rub")),
+                    _as_float(row.get("pending_claims_as_defendant_rub")),
+                    _as_float(row.get("enforcement_proceedings_rub")),
+                    _as_float(row.get("charter_capital_rub")),
         
-                    financial_values["income_rub"],
-                    financial_values["expenses_rub"],
-                    financial_values["taxes_rub"],
-                    financial_values["total_assets_rub"],
-                    financial_values["retained_earnings_uncovered_loss_rub"],
-                    financial_values["capital_and_reserves_rub"],
-                    financial_values["long_term_liabilities_rub"],
-                    financial_values["short_term_liabilities_rub"],
+                    _as_float(row.get("income_rub")),
+                    _as_float(row.get("expenses_rub")),
+                    _as_float(row.get("taxes_rub")),
+                    _as_float(row.get("total_assets_rub")),
+                    _as_float(row.get("retained_earnings_uncovered_loss_rub")),
+                    _as_float(row.get("capital_and_reserves_rub")),
+                    _as_float(row.get("long_term_liabilities_rub")),
+                    _as_float(row.get("short_term_liabilities_rub")),
         
-                    financial_values["revenue_rub"],
-                    financial_values["profit_loss_from_sales_rub"],
-                    financial_values["net_profit_loss_rub"],
+                    _as_float(row.get("revenue_rub")),
+                    _as_float(row.get("profit_loss_from_sales_rub")),
+                    _as_float(row.get("net_profit_loss_rub")),
                 ),
             )
 
