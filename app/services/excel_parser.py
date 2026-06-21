@@ -102,6 +102,7 @@ def get_sheet_preview(
 
     df = df.dropna(how="all")
     columns = [str(col).strip() for col in df.columns]
+    total_rows = len(df)
 
     preview = []
     for row_offset, (_, row) in enumerate(df.head(preview_rows).iterrows(), start=1):
@@ -123,6 +124,8 @@ def get_sheet_preview(
         "header_row": header_row,
         "columns": columns,
         "preview": preview,
+        "total_rows": total_rows,
+        "preview_rows": len(preview),
     }
 
 def read_application_excel_with_mapping(
