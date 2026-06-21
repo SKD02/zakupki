@@ -510,6 +510,7 @@ from pydantic import BaseModel, Field
 
 from app.database import get_connection, fetch_all, fetch_one
 from app.services.email_sender import build_procurement_email, extract_emails, send_email_smtp
+from app.services.units import ensure_unit_names_storage
 
 router = APIRouter()
 
@@ -604,6 +605,7 @@ def ensure_email_log_schema():
     with get_connection() as conn:
         with conn.cursor() as cur:
             ensure_email_log_table(cur)
+            ensure_unit_names_storage(cur)
             conn.commit()
 
 
@@ -865,12 +867,16 @@ def get_batch(batch_id: int):
             a.application_no,
             a.application_date,
             a.construction_object,
-            i.*
+            i.*,
+            COALESCE(u.unit_name, i.unit) AS unit
         FROM procurement_email_batch_items bi
         JOIN purchase_application_items i
             ON i.item_id = bi.item_id
         JOIN purchase_applications a
             ON a.application_id = i.application_id
+        LEFT JOIN units u
+            ON lower(btrim(u.unit_code)) = lower(btrim(i.unit))
+            OR lower(btrim(u.unit_name)) = lower(btrim(i.unit))
         WHERE bi.batch_id = %s
         ORDER BY
             a.application_id,
@@ -917,12 +923,16 @@ def send_selected_emails(payload: SendEmailsRequest):
                     a.application_no,
                     a.application_date,
                     a.construction_object,
-                    i.*
+                    i.*,
+                    COALESCE(u.unit_name, i.unit) AS unit
                 FROM procurement_email_batch_items bi
                 JOIN purchase_application_items i
                     ON i.item_id = bi.item_id
                 JOIN purchase_applications a
                     ON a.application_id = i.application_id
+                LEFT JOIN units u
+                    ON lower(btrim(u.unit_code)) = lower(btrim(i.unit))
+                    OR lower(btrim(u.unit_name)) = lower(btrim(i.unit))
                 WHERE bi.batch_id = %s
                 ORDER BY
                     a.application_id,

@@ -1,6 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from app.database import get_connection, fetch_all
+from app.services.material_okpd2 import ensure_material_okpd2_active_schema
+from app.services.suppliers import ensure_supplier_id_schema
+from app.services.units import ensure_unit_names_storage
 
 router = APIRouter()
 
@@ -58,6 +61,9 @@ def run_supplier_search(application_id: int, payload: SupplierSearchRequest):
     try:
         with conn:
             with conn.cursor() as cur:
+                ensure_material_okpd2_active_schema(cur)
+                ensure_supplier_id_schema(cur)
+                ensure_unit_names_storage(cur)
                 # 1. Проверяем, есть ли позиции заявки для поиска
                 cur.execute(
                     """
@@ -125,6 +131,7 @@ def run_supplier_search(application_id: int, payload: SupplierSearchRequest):
                         FROM purchase_application_items i
                         JOIN material_okpd2_map mom
                             ON trim(mom.material_id) = trim(i.material_id)
+                        AND mom.is_active = true
                         JOIN okpd2_okved2_map oom
                             ON trim(oom.okpd2_code) = trim(mom.okpd2_code)
                         JOIN suppliers sr
@@ -161,17 +168,19 @@ def run_supplier_search(application_id: int, payload: SupplierSearchRequest):
                         )
                         SELECT DISTINCT
                             i.item_id,
-                            ai.supplier_id AS supplier_id,
+                            COALESCE(ugsm.supplier_id::text, ai.supplier_id::text) AS supplier_id,
                             %s AS search_method,
                             'AI' AS source_system,
                             i.material_id,
                             NULL::text AS okpd2_code,
                             NULL::text AS okved2_code,
                             mugm.id_possition AS user_group_id,
-                            ugsm.inn_supply AS supplier_inn,
+                            COALESCE(ai.inn, ugsm.inn_supply) AS supplier_inn,
                             COALESCE(
                                 NULLIF(ai.name, ''),
-                                ugsm.inn_supply
+                                NULLIF(ugsm.supplier_id::text, ''),
+                                NULLIF(ugsm.inn_supply, ''),
+                                'Не найдено'
                             ) AS supplier_name,
                             'Материал найден через Material → Group → user_group_supply_map / suppliers'
                         FROM purchase_application_items i
@@ -180,11 +189,11 @@ def run_supplier_search(application_id: int, payload: SupplierSearchRequest):
                         JOIN user_group_supply_map ugsm
                             ON ugsm.user_group_id = mugm.id_possition
                         LEFT JOIN suppliers ai
-                            ON ai.inn = ugsm.inn_supply
+                            ON ai.supplier_id::text = ugsm.supplier_id::text
+                            OR ((ugsm.supplier_id IS NULL OR btrim(ugsm.supplier_id::text) = '') AND btrim(ai.inn) = btrim(ugsm.inn_supply))
                         WHERE i.application_id = %s
                           AND i.add_to_search = true
-                          AND ugsm.inn_supply IS NOT NULL
-                          AND trim(ugsm.inn_supply) <> ''
+                          AND COALESCE(NULLIF(ugsm.supplier_id::text, ''), NULLIF(ugsm.inn_supply, '')) IS NOT NULL
                         """,
                         (
                             SEARCH_METHOD_GROUP_AI,
@@ -297,7 +306,7 @@ def get_supplier_search_results(application_id: int):
             r.is_selected,
             r.created_at,
             i.material_name,
-            i.unit,
+            COALESCE(u.unit_name, i.unit) AS unit,
             i.quantity,
             i.work_doc_code,
             i.supply_start_date,
@@ -305,6 +314,9 @@ def get_supplier_search_results(application_id: int):
         FROM supplier_search_results r
         JOIN purchase_application_items i
             ON i.item_id = r.item_id
+        LEFT JOIN units u
+            ON lower(btrim(u.unit_code)) = lower(btrim(i.unit))
+            OR lower(btrim(u.unit_name)) = lower(btrim(i.unit))
         WHERE i.application_id = %s
         ORDER BY
             r.search_method,
