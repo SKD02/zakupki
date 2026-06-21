@@ -365,7 +365,7 @@ def preview_excel_sheet(payload: ExcelPreviewRequest):
         file_path=file_path,
         sheet_name=payload.sheet_name,
         header_row=payload.header_row,
-        preview_rows=15,
+        preview_rows=1000,
     )
 
     if not result["ok"]:
