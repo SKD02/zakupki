@@ -196,12 +196,14 @@ def read_application_excel_with_mapping(
         unit_col = column_mapping["unit"]
         quantity_col = column_mapping["quantity"]
         work_doc_col = column_mapping["work_doc_code"]
+        work_doc_subject_col = column_mapping.get("work_doc_subject")
         supply_period_col = column_mapping["supply_period"]
 
         material_name = row.get(material_col)
         unit = row.get(unit_col)
         quantity = row.get(quantity_col)
         work_doc_code = row.get(work_doc_col)
+        work_doc_subject = row.get(work_doc_subject_col) if work_doc_subject_col else None
         supply_period = row.get(supply_period_col)
 
         if material_name is None or str(material_name).strip() == "":
@@ -225,6 +227,7 @@ def read_application_excel_with_mapping(
             "unit": str(unit).strip() if unit is not None else None,
             "quantity": quantity_value,
             "work_doc_code": str(work_doc_code).strip() if work_doc_code else None,
+            "work_doc_subject": str(work_doc_subject).strip() if work_doc_subject else None,
             "supply_start_date": supply_start_date,
             "supply_end_date": supply_end_date,
             "raw_payload": raw_payload,
