@@ -26,7 +26,6 @@
 #     validate_work_doc_rows,
 # )
 # from app.services.units import ensure_unit_names_storage
-
 # router = APIRouter()
 # UPLOAD_DIR = "uploads"
 # os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -787,10 +786,20 @@ from app.services.contracts import (
     validate_work_doc_rows,
 )
 from app.services.units import ensure_unit_names_storage
+from app.services.excel_templates import build_excel_template_response
 
 router = APIRouter()
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+APPLICATION_TEMPLATE_FIELDS = [
+    {"key": "material_name", "label": "Наименование позиции", "required": True, "description": "Должно совпадать с материалом в справочнике материалов."},
+    {"key": "unit", "label": "Единица измерения", "required": True, "description": "Код или наименование из справочника единиц измерения."},
+    {"key": "quantity", "label": "Количество", "required": True, "description": "Число. Можно использовать запятую или точку как десятичный разделитель."},
+    {"key": "work_doc_code", "label": "Шифр рабочей документации", "required": True, "description": "Шифр РД должен быть связан с выбранным договором и предметом."},
+    {"key": "supply_period", "label": "Дата начала и завершения поставки", "required": True, "description": "Например: 01.07.2026 - 31.07.2026."},
+]
 
 
 class ExcelPreviewRequest(BaseModel):
@@ -1136,6 +1145,26 @@ def build_material_map(cur):
     return material_map
 
 
+@router.get("/application-template")
+def download_application_template():
+    return build_excel_template_response(
+        filename="application-template.xlsx",
+        sheet_title="Шаблон заявки",
+        fields=APPLICATION_TEMPLATE_FIELDS,
+        example_row={
+            "material_name": "Кабель силовой",
+            "unit": "м",
+            "quantity": "100",
+            "work_doc_code": "РД-001",
+            "supply_period": "01.07.2026 - 31.07.2026",
+        },
+        description=(
+            "Заполните позиции заявки на первом листе. Перед загрузкой выберите договор и предмет в интерфейсе. "
+            "Excel-загрузка и ручной ввод проходят через одну backend-проверку."
+        ),
+    )
+
+
 @router.post("/excel/init")
 def init_excel_upload(file: UploadFile = File(...)):
     upload_id, file_path = save_upload_file(file)
@@ -1257,6 +1286,7 @@ def create_application_from_items(
                 material_map = build_material_map(cur)
 
                 missing = []
+                material_unit_conflicts = []
                 invalid_rows = []
 
                 for item in items:
@@ -1264,13 +1294,42 @@ def create_application_from_items(
                     found = material_map.get(key)
 
                     if not found:
-                        missing.append({
-                            "row": item["source_row_no"],
-                            "material_name": item["material_name"],
-                            "unit": item["unit"],
-                            "work_doc_code": item.get("work_doc_code"),
-                            "work_doc_subject": item.get("work_doc_subject"),
-                        })
+                        cur.execute(
+                            """
+                            SELECT
+                                m.material_id,
+                                m.material_name,
+                                COALESCE(u.unit_name, m.unit) AS unit
+                            FROM materials m
+                            LEFT JOIN units u
+                                ON lower(btrim(u.unit_code)) = lower(btrim(m.unit))
+                                OR lower(btrim(u.unit_name)) = lower(btrim(m.unit))
+                            WHERE lower(btrim(m.material_name)) = lower(btrim(%s))
+                            ORDER BY m.material_id
+                            LIMIT 10
+                            """,
+                            (item["material_name"],),
+                        )
+                        same_name_matches = cur.fetchall()
+
+                        if same_name_matches:
+                            material_unit_conflicts.append({
+                                "row": item["source_row_no"],
+                                "material_name": item["material_name"],
+                                "unit": (item.get("raw_payload") or {}).get("resolved_unit") or item["unit"],
+                                "work_doc_code": item.get("work_doc_code"),
+                                "work_doc_subject": item.get("work_doc_subject"),
+                                "error": "В справочнике уже есть материал с таким наименованием, но с другой единицей измерения.",
+                                "matches": same_name_matches,
+                            })
+                        else:
+                            missing.append({
+                                "row": item["source_row_no"],
+                                "material_name": item["material_name"],
+                                "unit": (item.get("raw_payload") or {}).get("resolved_unit") or item["unit"],
+                                "work_doc_code": item.get("work_doc_code"),
+                                "work_doc_subject": item.get("work_doc_subject"),
+                            })
                     else:
                         item["material_id"] = found["material_id"]
 
@@ -1284,9 +1343,17 @@ def create_application_from_items(
                             invalid_rows.append({
                                 "row": item["source_row_no"],
                                 "material_name": item["material_name"],
-                                "unit": item["unit"],
+                                "unit": (item.get("raw_payload") or {}).get("resolved_unit") or item["unit"],
                                 "error": "Дата начала поставки больше даты окончания поставки",
                             })
+
+                if material_unit_conflicts:
+                    return make_json_safe({
+                        "status": "MATERIAL_UNIT_CONFLICTS",
+                        "message": "В заявке есть материалы, которые уже заведены в справочнике с другой единицей измерения.",
+                        "redirect_url": "/dict/materials",
+                        "material_unit_conflicts": material_unit_conflicts,
+                    })
 
                 if missing:
                     return make_json_safe({

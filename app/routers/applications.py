@@ -3609,6 +3609,145 @@ def get_kp_requests(limit: int = 500):
     )
 
 
+@router.delete("/registry/kp-requests/{kp_request_id}")
+def delete_kp_request(kp_request_id: int):
+    """Удаляет запрос КП и все созданные именно по нему результаты подбора и черновики."""
+    conn = get_connection()
+
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                ensure_registry_columns(cur)
+                ensure_kp_request_schema(cur)
+
+                cur.execute(
+                    """
+                    SELECT kp_request_id, kp_request_code
+                    FROM kp_requests
+                    WHERE kp_request_id = %s
+                    """,
+                    (kp_request_id,),
+                )
+                request = cur.fetchone()
+
+                if not request:
+                    raise HTTPException(status_code=404, detail="КП-запрос не найден")
+
+                cur.execute(
+                    """
+                    SELECT item_id
+                    FROM kp_request_items
+                    WHERE kp_request_id = %s
+                    """,
+                    (kp_request_id,),
+                )
+                item_ids = [row["item_id"] for row in cur.fetchall()]
+
+                cur.execute(
+                    """
+                    SELECT batch_id
+                    FROM procurement_email_batches
+                    WHERE kp_request_id = %s
+                    """,
+                    (kp_request_id,),
+                )
+                batch_ids = [row["batch_id"] for row in cur.fetchall()]
+
+                deleted_batch_item_links = 0
+                deleted_batches = 0
+                deleted_supplier_results = 0
+                deleted_kp_item_links = 0
+                reset_items = 0
+
+                if batch_ids:
+                    cur.execute(
+                        """
+                        DELETE FROM procurement_email_batch_items
+                        WHERE batch_id = ANY(%s)
+                        """,
+                        (batch_ids,),
+                    )
+                    deleted_batch_item_links = cur.rowcount or 0
+
+                cur.execute(
+                    """
+                    DELETE FROM procurement_email_batches
+                    WHERE kp_request_id = %s
+                    """,
+                    (kp_request_id,),
+                )
+                deleted_batches = cur.rowcount or 0
+
+                cur.execute(
+                    """
+                    DELETE FROM supplier_search_results
+                    WHERE kp_request_id = %s
+                    """,
+                    (kp_request_id,),
+                )
+                deleted_supplier_results = cur.rowcount or 0
+
+                cur.execute(
+                    """
+                    DELETE FROM kp_request_items
+                    WHERE kp_request_id = %s
+                    """,
+                    (kp_request_id,),
+                )
+                deleted_kp_item_links = cur.rowcount or 0
+
+                cur.execute(
+                    """
+                    DELETE FROM kp_requests
+                    WHERE kp_request_id = %s
+                    """,
+                    (kp_request_id,),
+                )
+
+                if item_ids:
+                    cur.execute(
+                        """
+                        UPDATE purchase_application_items i
+                        SET processing_status = 'NEW',
+                            updated_at = now()
+                        WHERE i.item_id = ANY(%s)
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM supplier_search_results r
+                              WHERE r.item_id = i.item_id
+                          )
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM procurement_email_batch_items bi
+                              WHERE bi.item_id = i.item_id
+                          )
+                        """,
+                        (item_ids,),
+                    )
+                    reset_items = cur.rowcount or 0
+
+                return {
+                    "status": "OK",
+                    "kp_request_id": request["kp_request_id"],
+                    "kp_request_code": request["kp_request_code"],
+                    "deleted_items_links_count": deleted_kp_item_links,
+                    "deleted_supplier_results_count": deleted_supplier_results,
+                    "deleted_batch_item_links_count": deleted_batch_item_links,
+                    "deleted_batches_count": deleted_batches,
+                    "reset_items_count": reset_items,
+                }
+
+    except HTTPException:
+        raise
+    except Exception as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ошибка удаления запроса КП: {str(error)}",
+        )
+    finally:
+        conn.close()
+
+
 @router.get("/registry/kp-requests/{kp_request_id}")
 def get_kp_request_detail(kp_request_id: int):
     """Детальная карточка запроса КП: позиции, найденные поставщики, черновики."""

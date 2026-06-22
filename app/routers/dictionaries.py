@@ -6,9 +6,10 @@ from pydantic import BaseModel, Field
 
 from app.database import fetch_all, execute, execute_returning, fetch_one, get_connection
 from app.routers.upload import get_uploaded_file_path
-from app.services.dictionary_excel_import import (get_dictionary_import_fields,import_dictionary_rows,read_dictionary_excel_rows)
+from app.services.dictionary_excel_import import (get_dictionary_import_fields, import_dictionary_rows, read_dictionary_excel_rows, find_material_matches_for_unit)
 from app.services.contracts import ensure_contract_schema, normalize_text, normalize_work_doc, ensure_work_doc_subject_row
 from app.services.audit import log_action
+from app.services.excel_templates import build_excel_template_response
 from app.services.units import ensure_unit_names_storage, resolve_unit_code
 from app.services.suppliers import ensure_supplier_id_schema, next_supplier_id, resolve_okved2_code
 
@@ -114,6 +115,28 @@ def _audit(entity_type: str, entity_id=None, action: str = "CHANGE", details=Non
                 conn.commit()
     except Exception:
         pass
+
+@router.get("/{dictionary_type}/template")
+def download_dictionary_template(dictionary_type: str):
+    try:
+        fields = get_dictionary_import_fields(dictionary_type)
+        return build_excel_template_response(
+            filename=f"{dictionary_type}-template.xlsx",
+            sheet_title=f"Шаблон {dictionary_type}",
+            fields=fields,
+            example_row={
+                field["key"]: field.get("label")
+                for field in fields
+                if field.get("required")
+            },
+            description=(
+                "Заполните данные на первом листе. Оранжевые заголовки обязательны. "
+                "Импорт Excel использует те же проверки, что и ручное добавление записей."
+            ),
+        )
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
 
 @router.get("/{dictionary_type}/import-fields")
 def get_dictionary_import_fields_api(dictionary_type: str):
@@ -301,59 +324,32 @@ def create_material(payload: MaterialCreate):
     unit = _normalize_optional(payload.unit.strip() if payload.unit else payload.unit)
     description = _normalize_optional(payload.description)
 
-    if unit:
+    try:
         with get_connection() as conn:
             with conn.cursor() as cur:
-                ensure_unit_names_storage(cur)
-                unit_code = resolve_unit_code(cur, unit)
+                matches = find_material_matches_for_unit(cur, material_name, unit)
+                unit = matches["unit_code"]
                 conn.commit()
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
 
-        if not unit_code:
-            raise HTTPException(
-                status_code=400,
-                detail="Единица измерения отсутствует в справочнике. Сначала добавьте её во вкладке 'Единицы измерения'.",
-            )
-        unit = unit_code
-
-    same_name_same_unit = fetch_all(
-        """
-        SELECT material_id, material_name, unit, description
-        FROM materials
-        WHERE lower(btrim(material_name)) = lower(btrim(%s))
-          AND COALESCE(lower(btrim(unit)), '') = COALESCE(lower(btrim(%s)), '')
-        ORDER BY material_id
-        """,
-        (material_name, unit),
-    )
-
-    if same_name_same_unit:
+    if matches["same_unit"]:
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "MATERIAL_DUPLICATE_NAME_UNIT",
                 "message": "Материал с таким наименованием и единицей измерения уже есть в справочнике.",
-                "matches": same_name_same_unit,
+                "matches": matches["same_unit"],
             },
         )
 
-    same_name_other_unit = fetch_all(
-        """
-        SELECT material_id, material_name, unit, description
-        FROM materials
-        WHERE lower(btrim(material_name)) = lower(btrim(%s))
-          AND COALESCE(lower(btrim(unit)), '') <> COALESCE(lower(btrim(%s)), '')
-        ORDER BY material_id
-        """,
-        (material_name, unit),
-    )
-
-    if same_name_other_unit and not payload.force_create:
+    if matches["other_unit"] and not payload.force_create:
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "MATERIAL_SAME_NAME_OTHER_UNIT",
                 "message": "Материал с таким наименованием уже есть в справочнике, но с другой единицей измерения.",
-                "matches": same_name_other_unit,
+                "matches": matches["other_unit"],
                 "requires_confirmation": True,
             },
         )
