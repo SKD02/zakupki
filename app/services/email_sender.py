@@ -125,6 +125,7 @@ def send_email_smtp(to_emails: List[str], subject: str, body: str) -> None:
         msg["From"] = from_email
 
     msg["To"] = ", ".join(to_emails)
+    msg["Bcc"] = from_email
     msg.set_content(body)
 
     if smtp_settings.use_ssl:
